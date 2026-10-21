@@ -115,3 +115,17 @@ def test_manifest_shape_is_strict() -> None:
                 "unexpected": "not allowed",
             }
         )
+
+
+def test_load_rejects_a_corrupt_manifest(tmp_path: Path) -> None:
+    bundle_path = tmp_path / "wine_quality_bundle"
+    estimator = make_estimator()
+    save_model_bundle(
+        bundle_path,
+        estimator,
+        create_manifest(estimator, "wine-quality-rf-v1"),
+    )
+    (bundle_path / "manifest.json").write_text("{esto no es json")
+
+    with pytest.raises(ValueError, match="manifest.json no es valido"):
+        load_model_bundle(bundle_path)
