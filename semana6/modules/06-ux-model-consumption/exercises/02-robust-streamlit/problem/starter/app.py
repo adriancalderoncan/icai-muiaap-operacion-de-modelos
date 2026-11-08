@@ -74,15 +74,43 @@ def collect_values(st: Any) -> tuple[bool, dict[str, float]]:
 
 
 def get_cached_gateway(st: Any, bundle_value: str | None) -> InferenceGateway:
-    """TODO: usa `st.cache_resource` sobre el gateway, no sobre la respuesta."""
+    """Usa `st.cache_resource` sobre el gateway, no sobre la respuesta."""
 
-    raise NotImplementedError("TODO: cachea el gateway heredado de S5")
+    return st.cache_resource(build_gateway)(bundle_value)
 
 
 def render_state(st: Any, state: UiState, target: Any | None = None) -> None:
-    """TODO: presenta idle/loading/success/error en un target de Streamlit."""
+    """Presenta idle/loading/success/error en un target de Streamlit."""
 
-    raise NotImplementedError("TODO: renderiza el estado sin mostrar excepciones")
+    area = (target or st).container()
+    with area:
+        if state.phase == "idle":
+            st.info("Completa el formulario y pulsa «Ejecutar inferencia».")
+        elif state.phase == "loading":
+            st.info("Ejecutando inferencia…")
+        elif state.phase == "success":
+            view = state.view
+            category, confidence, latency = st.columns(3)
+            category.metric("Categoría", view.quality_label)
+            confidence.metric("Confianza", f"{view.confidence:.0%}")
+            latency.metric("Latencia", f"{view.latency_ms:.0f} ms")
+            if view.confidence_level == "low":
+                st.warning(f"{view.confidence_label}: {view.confidence_message}")
+            else:
+                st.info(f"{view.confidence_label}: {view.confidence_message}")
+            if view.latency_status == "above_target":
+                st.warning(view.latency_message)
+            else:
+                st.caption(view.latency_message)
+            with st.expander("Trazabilidad"):
+                st.write(f"model_version: {view.model_version}")
+                st.write(f"preprocessing_version: {view.preprocessing_version}")
+                st.write(f"request_id: {state.request_id}")
+        else:
+            error = state.error
+            st.error(f"{error.title}. {error.message}")
+            st.info(error.recovery)
+            st.caption(f"request_id: {error.request_id}")
 
 
 def main() -> None:
@@ -123,6 +151,7 @@ def main() -> None:
                 ),
                 state="complete" if state.phase == "success" else "error",
             )
+        state_slot.empty()
 
     if st.button("Limpiar último resultado"):
         clear_last_state(st.session_state)
