@@ -31,3 +31,60 @@ def leer_argumentos(texto):
 # TODO: ejecutar_tool(nombre, argumentos_json) -> dict con "ok" True/False
 #       (tool desconocida, JSON roto, datos invalidos o campos inventados -> ok False con el error)
 # TODO: responder(mensajes, llm) -> ChatSalida, con el bucle LLM -> tool -> LLM (maximo MAX_VUELTAS)
+
+
+def definir_tool():
+    return {
+        "type": "function",
+        "function": {
+            "name": NOMBRE_TOOL,
+            "description": "Calcula la probabilidad de impago de una solicitud de prestamo",
+            "parameters": PrestamoEntrada.model_json_schema(),
+        },
+    }
+
+
+def ejecutar_tool(nombre, argumentos_json):
+    if nombre != NOMBRE_TOOL:
+        return {"ok": False, "error": "La tool " + str(nombre) + " no existe"}
+    argumentos = leer_argumentos(argumentos_json)
+    try:
+        entrada = PrestamoEntrada(**argumentos)
+    except ValidationError as error:
+        return {"ok": False, "error": str(error)}
+    salida = predecir(entrada)
+    return {
+        "ok": True,
+        "probabilidad_impago": salida.probabilidad_impago,
+        "decision": salida.decision,
+    }
+
+
+def responder(mensajes, llm):
+    historial = [{"role": "system", "content": SISTEMA}]
+    for mensaje in mensajes:
+        historial.append(mensaje.model_dump())
+    herramientas = [definir_tool()]
+    herramienta = None
+
+    for vuelta in range(MAX_VUELTAS):
+        respuesta = llm.completar(historial, herramientas)
+        if not respuesta.get("tool_calls"):
+            return ChatSalida(respuesta=respuesta["content"], herramienta=herramienta)
+
+        historial.append(respuesta)
+        for llamada in respuesta["tool_calls"]:
+            nombre = llamada["function"]["name"]
+            argumentos = llamada["function"]["arguments"]
+            resultado = ejecutar_tool(nombre, argumentos)
+            herramienta = HerramientaUsada(
+                nombre=nombre, argumentos=leer_argumentos(argumentos), resultado=resultado
+            )
+            historial.append(
+                {"role": "tool", "tool_call_id": llamada["id"], "content": json.dumps(resultado)}
+            )
+
+    return ChatSalida(
+        respuesta="No he podido calcular el riesgo. Revisa los datos e intentalo otra vez.",
+        herramienta=herramienta,
+    )

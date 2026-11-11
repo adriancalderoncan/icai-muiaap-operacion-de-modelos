@@ -7,10 +7,10 @@ from threading import local
 from typing import Any
 
 import requests
-from pydantic import ValidationError  # noqa: F401 - pista para el TODO S7.4
+from pydantic import ValidationError
 
 from model_ui.contracts import PredictionPayload
-from model_ui.errors import (  # noqa: F401 - pistas para el TODO S7.2
+from model_ui.errors import (
     ArtifactUnavailableError,
     BackendInferenceError,
     InferenceTimeoutError,
@@ -61,7 +61,36 @@ class HttpInferenceGateway:
         # del resto de errores HTTP.
         # TODO S7.4: valida body["prediction"] como PredictionPayload; un dict sin
         # validar no satisface el contrato de salida.
-        raise NotImplementedError("Completa los TODO S7.1-S7.4")
+        self.last_request_id = None
+        try:
+            response = self._session.post(
+                self._prediction_url,
+                json={"features": dict(values)},
+                headers={"Accept": "application/json"},
+                timeout=self._timeout,
+            )
+        except requests.Timeout as error:
+            raise InferenceTimeoutError("La API ha tardado demasiado") from error
+        except requests.ConnectionError as error:
+            raise ArtifactUnavailableError("No se puede conectar con la API") from error
+        except requests.RequestException as error:
+            raise BackendInferenceError("Fallo en la peticion HTTP") from error
+
+        self.last_request_id = self._header_request_id(response)
+        status = response.status_code
+        if status == 422:
+            raise InputContractError("La API ha rechazado los datos de entrada")
+        if status == 503:
+            raise ArtifactUnavailableError("El modelo de la API no esta disponible")
+        if status < 200 or status >= 300:
+            raise BackendInferenceError(f"La API respondio HTTP {status}")
+
+        body = self._read_object(response)
+        self.last_request_id = self._request_id(response, body)
+        try:
+            return PredictionPayload.model_validate(body.get("prediction"))
+        except ValidationError as error:
+            raise BackendInferenceError("Prediccion fuera de contrato") from error
 
     @staticmethod
     def _read_object(response: Any) -> dict[str, Any]:
@@ -69,14 +98,22 @@ class HttpInferenceGateway:
 
         # TODO S7.3: usa response.json(), traduce ValueError y rechaza listas u
         # otros valores que no sean un objeto JSON.
-        raise NotImplementedError("Completa el lector JSON del TODO S7.3")
+        try:
+            body = response.json()
+        except ValueError as error:
+            raise BackendInferenceError("La respuesta no es JSON") from error
+        if not isinstance(body, dict):
+            raise BackendInferenceError("La respuesta no es un objeto JSON")
+        return body
 
     @staticmethod
     def _request_id(response: Any, body: dict[str, Any]) -> str | None:
         """Obtiene request_id del cuerpo y usa la cabecera como alternativa."""
 
         # TODO S7.3: prioriza body["request_id"] y usa X-Request-Id como fallback.
-        raise NotImplementedError("Completa la trazabilidad del TODO S7.3")
+        if body.get("request_id"):
+            return body["request_id"]
+        return HttpInferenceGateway._header_request_id(response)
 
     @staticmethod
     def _header_request_id(response: Any) -> str | None:
